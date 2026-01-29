@@ -5,3 +5,19 @@ SoC. BCM2837에 대해서 좀 더 자세히 설명하자면 Raspberry Pi 3 Model
 사용된 SoC이다. SoC이라 함은 System on Chip의 약자로, CPU, GPU, RAM,
 입출력 포트 등 컴퓨터 시스템에 필요한 모든 구성 요소가 하나의 칩에 집적된 형태를 
 의미한다.
+
+BCM2837은 simple SOC board로 모든 devices에 대한 access를 memory-mapped
+register를 통해서 한다. 즉, 각 device는 특정 메모리 주소에 매핑되어 있으며, 
+CPU는 해당 주소에 읽기/쓰기 작업을 통해 device와 상호작용한다. 
+
+'ARM Peripherals'란 CPU(ARM)가 제어하는 하드웨어 장치/기능(주변, peripherals)을
+지칭한다. 예를 들어, GPIO, UART, I2C, SPI, 타이머, 인터럽트 컨트롤러 등이 포함된다. 
+이러한 하드웨어 장치/기능은 memory-mapped register를 통한 memory-mapped I/O 
+방식을 사용하여 CPU가 제어한다. 즉, 어떤 '주소'에 값을 쓰면 실제 하드웨어가 동작하며,
+반대로 어떤 '주소'에서 값을 읽으면 하드웨어의 상태를 알 수 있다.
+
+이게 왜 중요하나면 ... bare-metal kernel이나 OS 개발을 하는 중이면, printf와
+같은 고수준 함수가 없으니, UART로 log찍고, GPIO toggle하고, timer로 delay 주고
+interrupt 걸고 ... 이런 것들을 직접 제어해야 한다. 이때, register를 직접 제어하여
+진행해야 한다. 그래서 ARM Peripherals에 대한 이해가 필수적이다. 이것에 대한 자세한
+설명은 BCM2837 ARM Peripherals 문서를 참고하면 된다.
