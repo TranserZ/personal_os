@@ -1,0 +1,7 @@
+Raspberry Pi devices
+
+Raspberry는 BCM2837를 사용한다. BCM2835 & BCM2836은 예전 모델에서 사용한 
+SoC. BCM2837에 대해서 좀 더 자세히 설명하자면 Raspberry Pi 3 Model 에서 
+사용된 SoC이다. SoC이라 함은 System on Chip의 약자로, CPU, GPU, RAM,
+입출력 포트 등 컴퓨터 시스템에 필요한 모든 구성 요소가 하나의 칩에 집적된 형태를 
+의미한다.
