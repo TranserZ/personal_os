@@ -1,0 +1,354 @@
+Raspberry Pi devices
+
+Raspberry는 BCM2837를 사용한다. BCM2835 & BCM2836은 예전 모델에서 사용한 
+SoC. BCM2837에 대해서 좀 더 자세히 설명하자면 Raspberry Pi 3 Model 에서 
+사용된 SoC이다. SoC이라 함은 System on Chip의 약자로, CPU, GPU, RAM,
+입출력 포트 등 컴퓨터 시스템에 필요한 모든 구성 요소가 하나의 칩에 집적된 형태를 
+의미한다.
+
+BCM2837은 simple SOC board로 모든 devices에 대한 access를 memory-mapped
+register를 통해서 한다. 즉, 각 device는 특정 메모리 주소에 매핑되어 있으며, 
+CPU는 해당 주소에 읽기/쓰기 작업을 통해 device와 상호작용한다. 
+
+'ARM Peripherals'란 CPU(ARM)가 제어하는 하드웨어 장치/기능(주변, peripherals)을
+지칭한다. 예를 들어, GPIO, UART, I2C, SPI, 타이머, 인터럽트 컨트롤러 등이 포함된다. 
+이러한 하드웨어 장치/기능은 memory-mapped register를 통한 memory-mapped I/O 
+방식을 사용하여 CPU가 제어한다. 즉, 어떤 '주소'에 값을 쓰면 실제 하드웨어가 동작하며,
+반대로 어떤 '주소'에서 값을 읽으면 하드웨어의 상태를 알 수 있다.
+
+이게 왜 중요하나면 ... bare-metal kernel이나 OS 개발을 하는 중이면, printf와
+같은 고수준 함수가 없으니, UART로 log찍고, GPIO toggle하고, timer로 delay 주고
+interrupt 걸고 ... 이런 것들을 직접 제어해야 한다. 이때, register를 직접 제어하여
+진행해야 한다. 그래서 ARM Peripherals에 대한 이해가 필수적이다. 이것에 대한 자세한
+설명은 BCM2837 ARM Peripherals 문서를 참고하면 된다.
+
+--------------------------------------------------------------------------
+
+Raspberry Pi 3는 0x3F000000 이후 공간을 devices를 위해 예약해 놓았다. 어떠한 
+device를 활성화(activate)하거나 설정(configure)하려면 해당 device에 mapped된
+memory address에 접근해여 특정 값들의 변경/쓰기가 필요하다.  
+
+A device register는 그저 메모리의 32-bit region일 뿐이다. 여기서 중요한게 
+menual에서 말하는 register는 'CPU register'가 아니라, 주변장치(peripherals)가 
+노출해 둔 32-bit 크기의 설정/상태 칸이다. 예를 들어, GPIO의 어떤 register bit는
+1. 이 pin을 입력으로 할지 출력으로 할지
+2. pull-up/pull-down을 켤지
+3. 현재 pin 전압이 1인지 0인지
+... 의 의미를 가진다. 따라서 'register에 값을 쓴다' = '장치 설정을 바꾼다'라는
+뜻이다. 
+
+좀 더 자세히 설명해보자 ... 
+주변장치(peripherals)는 여러 개의 register(control/status registers)를 가진다. 
+이 register들은 CPU 주소 공간에 MMIO(memory-mapped I/O) 방식으로 매핑되어 있다.
+즉, CPU가 특정 메모리 주소에 접근하면, 실제로는 해당 주변장치의 register에 접근하는
+것이다. 이를 통해 특정 주변장치의 설정/상태를 변경할 수 있다. 
+그렇다면 0x3F000000 이후의 주소들은 무엇일까?
+이 주소들은 RAM이 아니라 CPU가 peripheral bus에 연결된 MMIO 영역이다. 따라서, 
+CPU가 이 주소로 접근하면 memory controller가 '아 이 주소는 RAM이 아니라 주변장치 
+쪽이네' 하고 주변장치 inter-connect로 routing한다.
+
+여기서 중요한 detail은 
+1. 쓰기(store)/읽기(load)의 의미
+    a. 쓰기(store) : 주변장치의 설정 변경
+    b. 읽기(load)  : 주변장치의 상태 확인
+2. 각 register의 역할
+    a. register마다 write-only , read-only, read-write 속성이 다르다.
+    b. 어떤 bit는 1을 쓰면 클리어라는 특이한 규칙을 가지기도 한다.
+
+아래는 BCM2837 ARM Peripherals 문서의 내용 중 일부분이다.
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+1.2.3  ARM physical addresses
+
+Physical addresses start at 0x00000000 for RAM.
+
+• The ARM section of the RAM starts at 0x00000000.
+• The VideoCore section of the RAM is mapped in only if the system 
+    is configured to support a memory mapped display 
+    (this is the common case).
+
+The VideoCore MMU maps the ARM physical address space to the bus 
+address space seen by VideoCore (and VideoCore peripherals). 
+The bus addresses for RAM are set up to map onto the uncached bus 
+address range on the VideoCore starting at 0xC0000000.
+
+Physical addresses range from 0x3F000000 to 0x3FFFFFFF for peripherals. 
+The bus addresses for peripherals are set up to map onto the peripheral 
+bus address range starting at 0x7E000000. Thus a peripheral advertised 
+here at bus address 0x7Ennnnnn is available at physical address 0x3Fnnnnnn.
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+여기서 중요한 점은 '주소가 두 종류로 존재한다'는 것이다.
+
+1. ARM physical address : CPU가 인식하는 주소
+2. Bus address          : 주변장치가 인식하는 주소
+
+그리고 ARM이 보는 physical address space에서 RAM은 0x00000000부터 시작한다.
+즉, ARM 입장에서 0x00000000 ~ RAM_SIZE 까지는 RAM(= RAM 중에서 ARM이 직접
+접근하는 구간이 0부터 시작한다)이며, 0x3F000000 ~ 0x3FFFFFFF까지는 주변장치
+(peripherals) 영역이다. 
+
+VideoCore(= GPU)가 만약 memory-mapped display를 지원하도록 설정되어 있다면,
+VideoCore 쪽에서 RAM의 일부 구간을 매핑한다. 따라서 RAM은 ARM만 쓰는 것이 아니라
+GPU도 쓸 수 있다. 이 경우 주소 체계가 한 겹 더 생김.
+
+GPU 쪽에서 보은 주소 공간은 bus address space라고 하며 개별적으로 존재하고, GPU의 MMU가
+ARM physical address space를 bus address space에 매핑한다..
+RAM의 bus address는 0xC0000000부터 시작하는 uncached bus address range에 매핑된다.
+
+ARM이 보는 physical address space는 SoC 설계가 연결해 둔 블록만 유효한 구조로 작동한다.
+physical address space = '활용할 수 있는 주소공간'이라기 보다는 '주소에 따라 DRAM/MMIO/기타 블록으로 라우팅되도록 SoC가 정의한 주소 맵'이라고 이해하는 것이 더 적합하다. 
+physical address space는 0x0000 0000부터 시작한다. 이 주소부터 매핑된 값에 따라 연결되는 장치가 달라진다. 여기서 주의할 것이 1GB의 RAM의 전체가 매핑된 것이 아니다. 중간에 MMIO (0x3F000 0000 ~ 0x3FFF FFFF), reserved 구역 등이 껴 있기도 하다. 다만, ARM이 보게 되는 RAM은 되도록이면 '큰 연속 구간'으로 노출되게끔 한다. 그리고 필요할 때 RAM 구역을 mapping하는 것이 아니라, 하드웨어가 고정해 둔 physical address range로 존재한다. Raspberry Pi에서 ARM physical address space는 booting 순간부터 SoC의 address decoder가 이렇게 정해준다.
+
+1. 어떤 주소 범위 -> DRAM 컨트롤러로 routing (= RAM)
+	[0x0000_0000, 0x3F00_0000)
+2. 어떤 주소 범위 -> peripheral bus/MMIO로 routing (=외부장치)
+	[0x3F00_0000, 0x4000_0000)
+3. 어떤 주소 범위 -> reserved/기타
+(다시 말하지만, RAM이 “필요할 때마다 추가로 매핑”되는 게 아니라, 처음부터 어떤 범위가 RAM인지 고정된다.)
+
+그럼 여기서 드는 의문: Raspberry Pi 3에 탑재된 RAM은 1GB. DRAM 컨트롤러로 routing 된 범위는 1GB에 미치지 못한다. (1GB의 범위는 [0x0000_0000, 0x4000_0000]이지만 실제 ARM이 접근 가능한 RAM은 [0x0000_0000, 0x3EFF_FFFF]). 그렇다면 나머지 RAM 공간은 어떻게 사용되고 있는 것인가? 공간 낭비인가?
+
+답변:
+그렇지 않다. 
+물론 0x3F00_0000 ~ 0x3FFF_FFFF는 ARM에게는 RAM이 아니라 MMIO(peripheral register) 창이다.
+ARM 주소맵에서는 이 MMIO 창 때문에 16MiB 크기의 DRAM 상단 일부가 buffer/firmware 등의 용도로 사용된다. 이 부분에 대한 이해를 위해서 ARM 입장에서 physical address space를 어떻게 활용하는지 알아보자
+
+ARM입장에서 physical address space를 활용하는 방법은 다음과 같다.
+1. RAM 그 자체로 활용 
+	a. (code/data/stack/heap 등)
+	b. buffer로 활용
+		i. memory-mapped display(framebuffer)가 대표적인 예시
+		ii. buffer 공간은 이 공간을 '사용하는 장치들의 memory mapping이 같은 곳에 이루어진 것'과 비슷한 개념이다. 각 장치는 각자 자기 주소 체계로 이 공간을 가리킨다. 
+2. MMIO로 활용
+	- peripherals의 설정 값 수정/읽기 용으로 사용
+3. reserved/holes/기타 블록으로 활용
+	- 어떤 주소는 RAM도 MMIO도 아니고, 접근하면 의미 없거나 위험할 수 있음.
+
+하나하나 살펴보자.
+1. RAM 그 자체로 활용
+	a. -skip-
+	b. buffer로 활용
+
+화면에 원하는 값을 띄우기 위해서는 1. CPU에서 원하는 값을 계산하고, 2. GPU에서 원하는 값을 띄워야 한다. 여기 CPU -> GPU로 '원하는 값'을 전달하기 위해서는 중간장치가 필요하다. 그 때 사용되는 것이 'buffer', 따라서 RAM을 공유자원으로 사용하는 것이다. CPU와 GPU는 이 공유자원에 어떻게 접근하냐면 ...
+
+1. CPU (ARM)
+	-> 자기 관점의 RAM 주소로 접근. ARM physical 주소(0x0… 대) 를 그대로 포인터로 써서 접근한다.
+2. GPU (VideoCore)
+	-> 자기 관점의 RAM 주소로 접근. 이를 bus address라고 한다. RAM을 bus에서 볼 때 보통 0xC… 같은 RAM bus window(uncached) 로 잡혀 있다고 매뉴얼에 언급된다.
+
+다음으로 ...
+2. MMIO로 활용
+peripheral registers를 읽고 쓰기 위해서 사용된다. ARM관점에서는 이 register들이 0x3F... 주소를 통해서 보인다. VideoCore관점에서는 이 register들이 bus를 통해 0x7E ... 주소를 통해서 보인다.
+
+마지막으로 3. reserved/holes/기타 블록으로 활용은 skip.
+
+요약하면 
+버퍼(RAM): ARM은 RAM 주소로, VideoCore는 RAM bus 주소로 접근
+레지스터(MMIO): ARM은 0x3F…로, VideoCore는 0x7E…로 접근
+
+
+질문: memory-mapped display를 안 쓰면 화면 출력 불가능? 더 복잡할 뿐?
+
+답변: 출력 가능. 더 복잡한 방법을 통해서 가능하긴 하다. 
+UART 시리얼 콘솔로 디버깅한다거나 ... 
+
+--------------------------------------------------------------------------
+
+우리는 Mini UART device를 사용할 것이다. 
+여기서 UART는 Universal Asynchronous Receiver/Transmitter의 약자이다.
+즉, 비동기식 직렬 통신을 위한 하드웨어 장치이다. 이 장치는 memory mapped registers에
+저장된 값들을 sequence of high and low voltages로 변환하는 것이 가능하다. 그럼 이
+신호는 내 컴퓨터로 TTL-to-serial cable을 통해서 전달되고 terminal emuluator에 의해 
+해석된다. 우리는 UART의 이 기능을 활용해서 Raspberry Pi와 소통할 것이다. 
+
+아래는 Mini UART의 registers의 specification이다.
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+2.2 Mini UART
+
+The mini Uart has the following features: 
+============================================================
+• 7 or 8 bit operation. 
+• 1 start and 1 stop bit. 
+• No parities. 
+• Break generation. 
+• 8 symbols deep FIFOs for receive and transmit. 
+• SW controlled RTS, SW readable CTS. 
+• Auto flow control with programmable FIFO level. 
+• 16550 like registers. 
+• Baudrate derived from system clock. 
+
+This is a mini UART and it does NOT have the following capabilities: 
+============================================================
+• Break detection 
+• Framing errors detection. 
+• Parity bit 
+• Receive Time-out interrupt 
+• DCD, DSR, DTR or RI signals.
+
+Mini UART register details:
+============================================================
+
+[DLAB 요약]
+- DLAB = AUX_MU_LCR_REG bit7
+- DLAB=1:
+  * AUX_MU_IO_REG[7:0]  = Baudrate[7:0]  (LS 8 bits)
+  * AUX_MU_IER_REG[7:0] = Baudrate[15:8] (MS 8 bits)
+- DLAB=0:
+  * AUX_MU_IO_REG[7:0]  = TX/RX data (FIFO)
+  * AUX_MU_IER_REG bits = Interrupt enable
+
+------------------------------------------------------------
+AUX_MU_IO_REG (Mini UART I/O)  [bus: 0x7E21_5040]
+------------------------------------------------------------
+| Bits  | Field (DLAB 조건)                    | Type | Reset | Description |
+|-------|--------------------------------------|------|-------|-------------|
+| 31:8  | Reserved                              |  -   |   -   | 예약. write 0, read don't care |
+| 7:0   | Baudrate[7:0] (DLAB=1)                | R/W  |   0   | 16-bit baudrate 레지스터 하위 8비트 접근(LS 8 bits). LCR.DLAB=1일 때만 유효 |
+| 7:0   | Transmit data write (DLAB=0)          |  W   |   0   | 쓰기 데이터가 송신 FIFO로 들어감(FIFO not full일 때). LCR.DLAB=0일 때만 유효 |
+| 7:0   | Receive data read (DLAB=0)            |  R   |   0   | 읽기 데이터는 수신 FIFO에서 꺼냄(FIFO not empty일 때). LCR.DLAB=0일 때만 유효 |
+
+------------------------------------------------------------
+AUX_MU_IER_REG (Interrupt Enable / Baudrate[15:8]) [bus: 0x7E21_5044]
+------------------------------------------------------------
+| Bits  | Field (DLAB 조건)                    | Type | Reset | Description |
+|-------|--------------------------------------|------|-------|-------------|
+| 31:8  | Reserved                              |  -   |   -   | 예약. write 0, read don't care |
+| 7:0   | Baudrate[15:8] (DLAB=1)               | R/W  |   0   | 16-bit baudrate 레지스터 상위 8비트 접근(MS 8 bits). LCR.DLAB=1일 때만 유효 |
+| 7:4   | (ignored)                             |  -   |   -   | 16550 호환 UART에선 기능이 있을 수 있으나 여기서는 무시 |
+| 3:2   | Must be set to 1 to receive interrupts| R/W* |  00*  | 인터럽트를 받으려면 반드시 1로 설정해야 함(*문서 표현상 “must be set”) |
+| 1     | Enable transmit interrupts (DLAB=0)    | R/W  |   0   | 1이면 송신 FIFO가 비어 있을 때 interrupt line asserted. 0이면 송신 인터럽트 생성 안 함 |
+| 0     | Enable receive interrupts (DLAB=0)     | R/W  |   0   | 1이면 수신 FIFO가 1바이트 이상이면 interrupt line asserted. 0이면 수신 인터럽트 생성 안 함 |
+
+------------------------------------------------------------
+AUX_MU_IIR_REG (Interrupt Identify / FIFO clear) [bus: 0x7E21_5048]
+------------------------------------------------------------
+| Bits  | Field                               | Type | Reset | Description |
+|-------|-------------------------------------|------|-------|-------------|
+| 31:8  | Reserved                              |  -   |   -   | 예약. write 0, read don't care |
+| 7:6   | FIFO enables                          |  R   |  11   | FIFO는 항상 enable이므로 두 비트는 항상 1로 읽힘 |
+| 5:4   | -                                     |  R   |  00   | 항상 0으로 읽힘 |
+| 3     | -                                     |  R   |   0   | mini UART는 timeout 기능이 없어서 항상 0으로 읽힘 |
+| 2:1   | READ: Interrupt ID bits               | R/W  |  00   | [Read 시] 인터럽트 ID: 00=없음, 01=TX holding reg empty, 10=RX holds valid byte, 11=불가능 |
+| 2:1   | WRITE: FIFO clear bits                | R/W  |  00   | [Write 시] bit1=1 → receive FIFO clear, bit2=1 → transmit FIFO clear |
+| 0     | Interrupt pending                     |  R   |   1   | 인터럽트가 pending이면 이 비트는 0(=clear)로 읽힘 |
+
+------------------------------------------------------------
+AUX_MU_LCR_REG (Line Control / DLAB) [bus: 0x7E21_504C]
+------------------------------------------------------------
+| Bits  | Field          | Type | Reset | Description |
+|-------|----------------|------|-------|-------------|
+| 31:8  | Reserved       |  -   |   -   | 예약. write 0, read don't care |
+| 7     | DLAB access    | R/W  |   0   | 1이면 IO/IER 레지스터가 baudrate 레지스터 접근으로 바뀜. 동작 중에는 0이어야 함 |
+| 6     | Break          | R/W  |   0   | 1이면 UART1_TX 라인을 지속 low로 당김. 최소 12 bit time 유지 시 break condition 의미 |
+| 5:2   | Reserved/ignored|  -  |   0   | 16550 호환 UART에선 기능이 있을 수 있으나 여기서는 무시(예약) |
+| 1:0   | data size      | R/W  |   0   | 00=7-bit 모드, 11=8-bit 모드 |
+
+------------------------------------------------------------
+AUX_MU_MCR_REG (Modem Control) [bus: 0x7E21_5050]
+------------------------------------------------------------
+| Bits  | Field | Type | Reset | Description |
+|-------|-------|------|-------|-------------|
+| 31:8  | Reserved             |  -   |   -   | 예약. write 0, read don't care |
+| 7:2   | Reserved/ignored     |  -   |   0   | 16550 호환 UART에선 기능이 있을 수 있으나 여기서는 무시(예약) |
+| 1     | RTS                  | R/W  |   0   | 0이면 UART1_RTS=high, 1이면 UART1_RTS=low. RTS auto-flow 사용 시 이 비트는 무시될 수 있음(CNTL 설명 참고) |
+| 0     | Reserved/ignored     |  -   |   0   | 16550 호환 UART에선 기능이 있을 수 있으나 여기서는 무시(예약) |
+
+------------------------------------------------------------
+AUX_MU_LSR_REG (Line Status / Data Status) [bus: 0x7E21_5054]
+------------------------------------------------------------
+| Bits  | Field              | Type | Reset | Description |
+|-------|--------------------|------|-------|-------------|
+| 31:8  | Reserved           |  -   |   -   | 예약. write 0, read don't care |
+| 7     | Reserved/ignored   |  -   |   0   | 16550 호환 UART에선 기능이 있을 수 있으나 여기서는 무시 |
+| 6     | Transmitter idle   |  R   |   1   | 송신 FIFO가 비어 있고 송신기가 idle(마지막 비트 shift 완료)면 1 |
+| 5     | Transmitter empty  |  R   |   0   | 송신 FIFO가 최소 1바이트를 더 받을 수 있으면 1 |
+| 4:2   | Reserved/ignored   |  -   |   0   | 16550 호환 UART에선 기능이 있을 수 있으나 여기서는 무시 |
+| 1     | Receiver Overrun   | R/C  |   0   | 수신 FIFO가 full인데 추가 문자 도착→discard 발생 시 1. 이 레지스터를 읽을 때마다 clear됨 |
+| 0     | Data ready         |  R   |   0   | 수신 FIFO에 최소 1 symbol 있으면 1 |
+
+------------------------------------------------------------
+AUX_MU_MSR_REG (Modem Status) [bus: 0x7E21_5058]
+------------------------------------------------------------
+| Bits  | Field            | Type | Reset | Description |
+|-------|------------------|------|-------|-------------|
+| 31:8  | Reserved         |  -   |   -   | 예약. write 0, read don't care |
+| 7:6   | Reserved/ignored |  -   |   0   | 16550 호환 UART에선 기능이 있을 수 있으나 여기서는 무시 |
+| 5     | CTS status       |  R   |   1   | UART1_CTS 입력의 inverse. 1이면 UART1_CTS pin low, 0이면 UART1_CTS pin high |
+| 4     | Reserved         |  -   |   0   | 예약. write 0, read don't care |
+| 3:0   | Reserved/ignored |  -   |   0   | 16550 호환 UART에선 기능이 있을 수 있으나 여기서는 무시 |
+
+------------------------------------------------------------
+AUX_MU_SCRATCH (1-byte scratch storage) [bus: 0x7E21_505C]
+------------------------------------------------------------
+| Bits  | Field   | Type | Reset | Description |
+|-------|---------|------|-------|-------------|
+| 31:8  | Reserved|  -   |   -   | 예약. write 0, read don't care |
+| 7:0   | Scratch | R/W  |   0   | 1바이트 scratch 저장소(문서 표현: “One whole byte extra …”) |
+
+------------------------------------------------------------
+AUX_MU_CNTL_REG (Extra Control: flow-control, TX/RX enable) [bus: 0x7E21_5060]
+------------------------------------------------------------
+| Bits  | Field                               | Type | Reset | Description |
+|-------|-------------------------------------|------|-------|-------------|
+| 31:8  | Reserved                              |  -   |   -   | 예약. write 0, read don't care |
+| 7     | CTS assert level                      | R/W  |   0   | CTS auto-flow polarity 반전. 1=CTS assert level low*, 0=high* |
+| 6     | RTS assert level                      | R/W  |   0   | RTS auto-flow polarity 반전. 1=RTS assert level low*, 0=high* |
+| 5:4   | RTS AUTO flow level                   | R/W  |   0   | auto-flow 모드에서 RTS de-assert 시점(수신 FIFO 남은 empty space 기준) |
+|       |                                       |      |       | 00: empty 3칸 남으면 RTS de-assert |
+|       |                                       |      |       | 01: empty 2칸 남으면 RTS de-assert |
+|       |                                       |      |       | 10: empty 1칸 남으면 RTS de-assert |
+|       |                                       |      |       | 11: empty 4칸 남으면 RTS de-assert |
+| 3     | Enable transmit auto flow-control CTS  | R/W  |   0   | 1이면 CTS de-assert 시 송신 정지. 0이면 CTS 상태 무시 |
+| 2     | Enable receive auto flow-control RTS   | R/W  |   0   | 1이면 수신 FIFO가 auto-flow level 도달 시 RTS de-assert(사실상 RTR처럼 동작). 0이면 RTS는 MCR.bit1이 제어 |
+| 1     | Transmitter enable                     | R/W  |   1   | 1이면 송신기 enable, 0이면 disable |
+| 0     | Receiver enable                        | R/W  |   1   | 1이면 수신기 enable, 0이면 disable |
+
+------------------------------------------------------------
+AUX_MU_STAT_REG (Extra Status) [bus: 0x7E21_5064]
+------------------------------------------------------------
+| Bits  | Field                   | Type | Reset | Description |
+|-------|-------------------------|------|-------|-------------|
+| 31:28 | Reserved                |  -   |   -   | 예약. write 0, read don't care |
+| 27:24 | Transmit FIFO fill level|  R   |   0   | 송신 FIFO에 저장된 symbol 개수(범위 0~8) |
+| 23:20 | Reserved                |  -   |   -   | 예약. write 0, read don't care |
+| 19:16 | Receive FIFO fill level |  R   |   0   | 수신 FIFO에 저장된 symbol 개수(범위 0~8) |
+| 15:10 | Reserved                |  -   |   -   | 예약. write 0, read don't care |
+| 9     | Transmitter done        |  R   |   1   | 송신기 idle AND 송신 FIFO empty이면 1 (bit2 AND bit8의 논리 AND) |
+| 8     | Transmit FIFO is empty  |  R   |   1   | 송신 FIFO가 비어 있으면 1 → 최대 8 symbols 수용 가능 |
+| 7     | CTS line                |  R   |   0   | UART1_CTS 라인 상태 |
+| 6     | RTS status              |  R   |   0   | UART1_RTS 라인 상태 |
+| 5     | Transmit FIFO is full   |  R   |   0   | bit1의 inverse(반전) |
+| 4     | Receiver overrun        |  R   |   0   | overrun 발생 시 1. AUX_MU_LSR_REG 읽을 때마다 clear됨 |
+| 3     | Transmitter is idle     |  R   |   1   | 1=송신기 idle, 0=busy |
+| 2     | Receiver is idle        |  R   |   1   | 1=수신기 idle, 0=busy (수신 disable 상태에서 특히 유용) |
+| 1     | Space available         |  R   |   0   | 1=송신 FIFO에 1 symbol 이상 추가 가능, 0=full |
+| 0     | Symbol available        |  R   |   0   | 1=수신 FIFO에 1 symbol 이상 있음, 0=empty |
+
+------------------------------------------------------------
+AUX_MU_BAUD (Direct baudrate counter access) [bus: 0x7E21_5068]
+------------------------------------------------------------
+| Bits  | Field    | Type | Reset | Description |
+|-------|----------|------|-------|-------------|
+| 31:16 | Reserved |  -   |   -   | 예약. write 0, read don't care |
+| 15:0  | Baudrate | R/W  |   0   | mini UART baudrate counter(16-bit). DLAB+IO/IER로 접근하는 baudrate 레지스터와 동일 의미지만 직접 접근이 더 쉬움 |
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+Raspberry Pi는 2개의 UARTs를 가진다:
+1. Mini UART
+2. PL011 UART (Full-featured UART)
+이 둘의 차이점은 다음과 같다:
+1. Mini UART는 기능이 제한적이며, PL011 UART는 더 많은 기능을 제공한다.
+2. Mini UART는 시스템 클럭에서 파생된 보드레이트를 사용하며, PL011 UART는 독립적인 클럭 소스를 사용한다.
+3. Mini UART는 간단한 설정과 사용법을 제공하며, PL011 UART는 더 복잡한 설정 옵션을 제공한다.
+
+우선 Mini UART가 더 간단하기에 이를 사용하여 설명을 진행할 것이다.
+
+----------------------------------------------------------
+UART 외에 또 친숙해져야 하는 장치가 있다. 바로 - GPIO (General Purpose Input Output)
+GPIOs는 GPIO pins를 control하는 register들의 집합이다. GPIO pins는 digital signal을
+입력(input) 또는 출력(output)으로 설정할 수 있는 다목적 핀들이다. GPIO pins는 
+다양한 주변장치(peripherals)와 상호작용하는 데 사용된다. Raspberry Pi에서 2열로 종대로 모인 핀들이
+바로 GPIO pins이다. 
+
+GPIO pins가 어떻게 numbered되었는지는 diagram을 참고하라. 
+
+-----------------------------------------------------------

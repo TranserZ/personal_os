@@ -1,0 +1,28 @@
+Raspberry Pi의 start-up sequence는 다음과 같다. 
+
+1.  The device is powered on.
+2.  The GPU starts up and reads the config.txt file from the boot partition. 
+    This file contains some configuration parameters that the GPU uses to further adjust the startup sequence.
+3.  kernel8.img is loaded into memory and executed.
+
+여기서 config.txt 파일의 설정 값의 의미:
+kernel_old=1
+    -> kernel image가 address 0에 load되도록 specify.
+disable_commandline_tags=1
+    -> GPU가 command line arguments를 booted image로 pass하지 않도록 설정.
+        즉. GPU가 kernel 옆에 MEMO(부팅 정보)를 RAM에 써두는 것을 막는 옵션
+
+        여기서 MEMO는 ...
+
+        라즈베리파이는 부팅할 때:
+        1. GPU(펌웨어)가 먼저 돌아가서
+        2. 커널을 RAM에 올리고
+        3. 커널에게 실행을 넘겨줌
+
+        이때 GPU가 커널이 참고하라고 RAM의 특정 위치(보통 0x100 근처)에
+        1. 부팅 옵션(cmdline)
+        2. 메모리 크기 같은 정보
+        를 작게 써놓는 관례가 있음. 이걸 tags라고 부름.
+
+        여기서 문제가 kernel image는 address 0에 load되도록 했는데 바로 그 근처
+        0x100에 MEMO를 써버리면 kernel 내용 일부를 덮어써서 부팅이 깨질 수 있어. 
