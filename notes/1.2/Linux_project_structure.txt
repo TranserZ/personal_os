@@ -1,0 +1,111 @@
+1.2 Linux project structure
+Kernel의 일부분을 구현한 후 Linux와 비교하면서 배울 것.
+1.1에서 배운 내용도 상당 부분이 Linux와 유사하다.
+
+Project structure
+Linux같은 large software project를 살펴볼 때 project structure를 살펴보는 것이 많은 도움이 된다.
+왜냐하면 어떠한 module이 project를 구성하고 있고, 어떤 것이 high-level architecture인지 알 수 있기 때문이다.
+
+본격적으로 Linux kernel의 project structure를 살펴보자.
+먼저, linux repository를 clone하자. (v 4.14를 clone할 것.)
+-> Clone 한 위치는 ~/2026_winter/linux
+
+자 그럼 Linux repository의 겉을 한 번 훑어보자.
+
+1. COPYING
+2. Kconfig
+3. Makefile
+4. CREDITS
+5. Kbuild
+6. MAINTAINERS
+7. README
+8. *Documentation
+9. *arch
+10. *certs
+11. *drivers
+12. *fs
+13. *init
+14. *kernel
+15. *mm
+16. *samples
+17. *security
+18. *tools
+19. *virt
+20. *block
+21. *crypto
+22. *firmware
+23. *include
+24. *ipc
+25. *lib
+26. *net
+27. *scripts
+28. *sound
+29. *usr
+(*: 폴더)
+
+위 list는 Linux repository를 들어가면 바로 볼 수 있는 파일 & 폴더들이다. 이 중 중요한 폴더들을 우선 살펴보자.
+- arch
+    "CPU 종류별 맞춤 booting + low-level code"
+
+    이 folder는 여러 subfolders를 가지고 있다. 각 folder는 specific processor architecture를 의미한다.
+    같은 linux kernel이라도 CPU가 다르면 booting 시작 방식, interrupt 처리, register/memory model 등이
+    다르기 때문이다. 
+
+    우리는 이 중 arm64를 주로 볼 것임. 왜냐하면 ARM.v8와 가장 compatible하기 때문이다.
+- init
+    "kernel 공통 initialization(시동 걸고 기본 세팅!)"
+
+    kernel은 항상 architecture specific code에 의해 boot된다. 즉, kernel은 처음엔 arch/의 architecture 전용
+    booting 코드로 시작한다. 하지만 그 다음부터는, start_kernel()로 넘어간다. 즉, execution은 start_kernel()에게 
+    넘어간다. 
+
+    start_kernel()은 common kernel initialization에 responsible하고 architecture independent
+    kernel의 starting point이다. 즉, 'kernel을 본격적으로 운영할 준비'를 하는 함수로
+    1. memory/scheduler/interrupt/timer,
+    2. 각종 initialization routine 호출
+    3. 첫 process(init 또는 systemd로 이어지는 흐름)로 넘어가는 기반을 깐다.
+    **start_kernel()은 여러 다른 initialization function과 함께 init folder에 정의되어 있다.
+
+    쉽게 정리하자면, ...
+    arch/가 '점화 스위치 돌리는 단계'라면, init/은 '엔진 예열하고 계기판/센서 다 켜고 출발 준비하는 단계'이다.
+- kernel
+    "Linux의 핵심 기능(scheduler/process/sync 등)"
+
+    말 그대로 kernel의 중심부. Linux kernel의 core가 되는 folder이다. 
+    거의 모든 major kernel subsystems가 여기 구현되어 있다.
+    대표적으로:
+    1. scheduler
+    2. process/thread 관리
+    3. sync(lock, mutex etc)
+    4. timer, interrupt 처리의 공통 부분
+- mm
+    "memory management(virtual memory, page, allocator)"
+
+    kernel이 memory를 어떻게 쓰는지에 대한 내용의 거의 전부가 여기 저장되어 있다.
+    즉, 모든 data structures와 memory management 관련 methods는 여기 defined 되어 있다.
+    포함되는 개념으로는:
+    1. virtual memory
+    2. page 관리
+    3. allocator(buddy allocator, slab/slub, etc)
+    4. page cache, mmap(memory mapping) 관련 로직
+- drivers
+    "드라이버(hw와 대화하는 코드)가 저장되어 있는 폴더"
+
+    Linux kernel에서 가장 큰 폴더이다. 왜냐하면 여기에 모든 device drivers의 구현을 담고 있고 세상엔
+    너무나 많은 hw device가 있기 때문이다.
+- fs
+    "filesystem(file/directory)"
+
+    여러 다른 filesystem 구현을 여기서 찾을 수 있다. 
+    open(), read(), write()와 같은 파일 관련 system call이 실제로 동작할 수 있도록 아래에서 filesystem이
+    구현되어 있도록 한다.
+    대표적으로
+    1. ext4, XFS, Btrfs같은 구체적인 filesystem이 구현
+    2. VFS(Virtual File System) 같은 공통 interface 계층
+
+    **추가설명: 여러 filesystem이 있어도 '사용자 입장에선 모두 같은 파일처럼 보이도록 하는 공통층'
+
+전부를 엮어서 요약하자면 ...
+1. arch/가 커널을 CPU에 맞게 부팅 시작
+2. init/의 start_kernel()로 넘어가서 공통 초기화
+3. 이후 kernel/, mm/, drivers/, fs/ 같은 큰 서브시스템들이 제대로 동작하도록 세팅되고 실행됨
